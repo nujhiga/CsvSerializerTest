@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.12.35527.113 d17.12
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CsvSerializerTest", "CsvSerializerTest\CsvSerializerTest.csproj", "{84429082-DA23-4F42-9CFD-977A2CBA6C41}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CsvSerializer", "CsvSerializer\CsvSerializer.csproj", "{57B06547-148F-4355-82CC-6BDD7211DF23}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CsvFileHandler", "CsvFileHandler\CsvFileHandler.csproj", "{4F4983C4-390F-4712-B17E-AED2FB13E4A1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{84429082-DA23-4F42-9CFD-977A2CBA6C41}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{84429082-DA23-4F42-9CFD-977A2CBA6C41}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{84429082-DA23-4F42-9CFD-977A2CBA6C41}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{84429082-DA23-4F42-9CFD-977A2CBA6C41}.Release|Any CPU.Build.0 = Release|Any CPU
+		{57B06547-148F-4355-82CC-6BDD7211DF23}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{57B06547-148F-4355-82CC-6BDD7211DF23}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{57B06547-148F-4355-82CC-6BDD7211DF23}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{57B06547-148F-4355-82CC-6BDD7211DF23}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4F4983C4-390F-4712-B17E-AED2FB13E4A1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4F4983C4-390F-4712-B17E-AED2FB13E4A1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4F4983C4-390F-4712-B17E-AED2FB13E4A1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4F4983C4-390F-4712-B17E-AED2FB13E4A1}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
