@@ -1,12 +1,13 @@
 ﻿using CsvSerializer.Filtering;
 
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Reflection;
 
 namespace CsvSerializer;
 
-internal sealed class ObjectProperty(PropertyInfo pinfo, int index, bool? ignore = null!)
+
+
+internal sealed class ObjectProperty(PropertyInfo pinfo, int index, bool? isKey = null!, bool? ignore = null!)
 {
     public readonly PropertyInfo Pinfo = pinfo;
     public readonly Type Ptype = Nullable.GetUnderlyingType(pinfo.PropertyType) ?? pinfo.PropertyType;
@@ -25,10 +26,11 @@ internal sealed class ObjectProperties : Collection<ObjectProperty>
 {
     internal static ObjectProperties CreateProperties<T>(SerializationOptions options, char delimiter) where T : class
     {
-        IEnumerable<ObjectProperty> properties = CreateProperties(typeof(T), options);
+        Type type = typeof(T);
+        IEnumerable<ObjectProperty> properties = CreateProperties(type, options);
         bool requireFormat = delimiter is ',' && RequireFormatting(properties);
-
-        ObjectProperties oProperties = new ObjectProperties(typeof(T).Name, requireFormat);
+        
+        ObjectProperties oProperties = new ObjectProperties(type.Name, requireFormat);
 
         foreach (var p in properties)
             oProperties.Items.Add(p);
@@ -38,12 +40,15 @@ internal sealed class ObjectProperties : Collection<ObjectProperty>
     private static IEnumerable<ObjectProperty> CreateProperties(Type type, SerializationOptions options)
     {
         var baseProps = type.GetProperties(options.Flags);
+
         for (int i = 0; i < baseProps.Length; i++)
         {
             var bProp = baseProps[i];
 
             if (options.Filter.IsNone)
+            {
                 yield return new ObjectProperty(bProp, i);
+            }               
             else
             {
                 string pName = bProp.Name;
@@ -75,7 +80,16 @@ internal sealed class ObjectProperties : Collection<ObjectProperty>
 
     private readonly string _objTypeName;
     public readonly bool RequireFormat;
-
+    public int GetCount()
+    {
+        int cnt = 0;
+        foreach(var p in Items)
+        {
+            if (p.Ignore) continue;
+            cnt++;
+        }
+        return cnt;
+    }
     public IEnumerable<ObjectProperty> AsFiltered()
     {
         foreach(var p in Items)
@@ -123,6 +137,10 @@ internal sealed class ObjectProperties : Collection<ObjectProperty>
     public PropertyInfo GetPropInfo(string pname)
     {
         return this[pname].Pinfo;
+    }
+    public int GetPropIndex(string pname)
+    {
+        return this[pname].Pindex;
     }
 
     private static bool RequireFormatting(IEnumerable<ObjectProperty> properties)

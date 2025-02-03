@@ -1,10 +1,9 @@
 ﻿using CsvFileHandler.Handler;
 
-using System;
-using System.Collections.Generic;
-using System.Linq;
+using System.Collections.Concurrent;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace CsvFileHandler.IO;
 public sealed class CsvWriter(string filePath, CsvHandlerOptions options) : CsvHandler(filePath, options)
@@ -14,11 +13,15 @@ public sealed class CsvWriter(string filePath, CsvHandlerOptions options) : CsvH
     {
         QBuffer = new Queue<byte[]>();
     }
-    public void SetBufferString(ref StringBuilder sb)
+    public void SetBufferString(StringBuilder sb)
     {
-        QBuffer.Enqueue(GetStringBytes(sb.ToString()));
+        byte[] bytes = GetStringBytes(sb.ToString());
+        if (bytes.Length == 0) return;
+
+        QBuffer.Enqueue(bytes);
         sb.Clear();
     }
+
     public bool WriteBuffer()
     {
         using FileStream stream = GetStream(StreamFileMode.WriteLines);
@@ -31,8 +34,39 @@ public sealed class CsvWriter(string filePath, CsvHandlerOptions options) : CsvH
         stream.Flush();
 
         QBuffer.Clear();
-        QBuffer = new Queue<byte[]>();
+        QBuffer.TrimExcess();
 
         return true;
+    }
+}
+
+public static class CsvWriterExtensions
+{
+    public static string ToCsvString<T>(this T obj, char separator, bool getHeaders = false)
+    {
+        if (obj is null) return string.Empty;
+
+        StringBuilder sb = new();
+
+        PropertyInfo[] properties = typeof(T).GetProperties();
+        object[] objData = new object[properties.Length];
+
+        if (!getHeaders)
+        {
+            for (int i = 0; objData.Length > i; i++)
+            {
+                objData[i] = properties[i].GetValue(obj)!;
+
+                if (objData[i] is null)
+                    objData[i] = string.Empty;
+            }
+        }
+        else
+        {
+            for (int i = 0; objData.Length > i; i++)
+                objData[i] = properties[i].Name;
+        }
+
+        return sb.AppendJoin(separator, objData).ToString();
     }
 }

@@ -1,11 +1,8 @@
 ﻿using CsvFileHandler.IO;
 
-using System.Collections.Immutable;
+using System.Collections.Concurrent;
 using System.Globalization;
-using System.Net.NetworkInformation;
 using System.Reflection;
-using System.Reflection.PortableExecutable;
-using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace CsvSerializer;
@@ -21,33 +18,14 @@ public sealed class Deserializer : CsvSerializationBase
         reader = new CsvReader(filePath, readerOptions);
     }
 
+    internal readonly CsvReader reader;
+    internal ObjectFactory factory = null!;
     private bool headerMode;
-
-    private readonly CsvReader reader;
-    private ObjectFactory factory = null!;
-
-    private void Initialize<T>(bool validateSerializationMode = true) where T : class
-    {
-        if (validateSerializationMode)
-            ValidateSerializationMode();
-
-        headerMode = Options.Mode is SerializationMode.Header;
-
-        InitializeProperties<T>(reader.Delimiter);
-        factory = new ObjectFactory(Properties, Options);
-    }
-    private void ValidateSerializationMode()
-    {
-        if (Options.Mode is SerializationMode.Header && Options.HeadersMode is HeadersMode.None or HeadersMode.OrdinalIgnore)
-            throw new ArgumentException($"{nameof(Initialize)}: {nameof(HeadersMode)} can not be {nameof(HeadersMode.None)} or {nameof(HeadersMode.OrdinalIgnore)} when Options.Mode is {SerializationMode.Header}");
-        if (Options.Mode is SerializationMode.Ordinal && Options.HeadersMode is HeadersMode.FromFile or HeadersMode.FromType)
-            throw new ArgumentException($"{nameof(Initialize)}: {nameof(HeadersMode)} can not be {nameof(HeadersMode.FromFile)} or {nameof(HeadersMode.FromType)} when Options.Mode is {SerializationMode.Ordinal}");
-    }
 
     public IEnumerable<T> Deserialize<T>() where T : class, new()
     {
         Initialize<T>();
-        bool headersModeFlag = Options.HeadersMode is not HeadersMode.None;
+        bool headersModeFlag = Options.HeadersMode is not HeadersMode.None and not HeadersMode.FromType;
 
         foreach (var line in reader.ReadLines())
         {
@@ -69,6 +47,26 @@ public sealed class Deserializer : CsvSerializationBase
 
         if (headerMode) factory.CleanHeaders();
     }
+    public ConcurrentBag<T> ParallelDeserialize<T>() where T : class, new()
+    {
+        Initialize<T>(true);
+        char lclDelimiter = reader.Delimiter;
+        SerializationMode lclSerMode = Options.Mode;
+
+        ConcurrentBag<T> objs = [];
+        
+        reader.ReadLines().AsParallel().ForAll(ln =>
+        {
+            string[] ldata = ln.Split(lclDelimiter);
+            
+            T obj = factory.CreateObject<T>(ldata, lclSerMode);
+            if (obj is null) return;
+
+            objs.Add(obj);
+        });
+
+        return objs;
+    }
 
     public TCollection Deserialize<T, TCollection>()
         where T : class, new()
@@ -82,145 +80,194 @@ public sealed class Deserializer : CsvSerializationBase
 
         return collection;
     }
-
-    private class ObjectFactory
+    internal void Initialize<T>(bool parallelDeserialize = false) where T : class
     {
-        public ObjectFactory(ObjectProperties properties, SerializationOptions options)
-        {
-            this.properties = properties;
-            propertiesCount = properties.Count;
+        ValidateSerializationMode(parallelDeserialize);
 
-            if (options.HeadersMode is HeadersMode.FromType)
-                InitHeaders();
+        headerMode = Options.Mode is SerializationMode.Header;
+
+        InitializeProperties<T>(reader.Delimiter);
+        factory = new ObjectFactory(Properties, Options);
+    }
+    private void ValidateSerializationMode(bool parallelDeserialize)
+    {
+        if (Options.Mode is SerializationMode.Header)
+        {
+            if (Options.HeadersMode is HeadersMode.None or HeadersMode.OrdinalIgnore)
+                throw new ArgumentException($"{nameof(Initialize)}: {nameof(HeadersMode)} can not be {nameof(HeadersMode.None)} or {nameof(HeadersMode.OrdinalIgnore)} when Options.Mode is {SerializationMode.Header}");
+            if (parallelDeserialize && Options.HeadersMode is not HeadersMode.FromType)
+                throw new ArgumentException($"{nameof(Initialize)}: {nameof(HeadersMode)} only can be {nameof(HeadersMode.FromType)} when {nameof(ParallelDeserialize)} method is used.");
         }
 
-        private readonly ObjectProperties properties;
-        private readonly int propertiesCount;
-        private string[] headers = null!;
+        if (Options.Mode is SerializationMode.Ordinal && Options.HeadersMode is HeadersMode.FromFile or HeadersMode.FromType)
+            throw new ArgumentException($"{nameof(Initialize)}: {nameof(HeadersMode)} can not be {nameof(HeadersMode.FromFile)} or {nameof(HeadersMode.FromType)} when Options.Mode is {SerializationMode.Ordinal}");
+    }
+}
 
-        public T CreateObject<T>(string[] ldata, SerializationMode mode) where T : class, new()
+internal sealed class ObjectFactory
+{
+    public ObjectFactory(ObjectProperties properties, SerializationOptions options)
+    {
+        this.properties = properties;
+        propertiesCount = properties.Count;
+
+        if (options.HeadersMode is HeadersMode.FromType)
+            InitHeaders();
+    }
+
+    private readonly ObjectProperties properties;
+    private readonly int propertiesCount;
+    private string[] headers = null!;
+    private int headersLen = 0;
+
+    public T CreateObject<T>(string[] ldata, SerializationMode mode) where T : class, new()
+    {
+        return mode switch
         {
-            return mode switch
-            {
-                SerializationMode.Ordinal => GetObjectOrdinal<T>(ldata),
-                SerializationMode.Header => GetObjectHeader<T>(ldata),
-                _ => null!
-            };
-        }
-        public T CreateObject<T>(ImmutableArray<string> ldata, SerializationMode mode) where T : class, new()
+            SerializationMode.Ordinal => GetObjectOrdinal<T>(ldata),
+            SerializationMode.Header => GetObjectHeader<T>(ldata),
+            _ => null!
+        };
+    }
+
+    private T GetObjectOrdinal<T>(string[] ldata) where T : class, new()
+    {
+        int ldataLength = ldata.Length;
+        if (ldataLength != propertiesCount) return null!;
+
+        T obj = new();
+
+        foreach (var prop in properties)
         {
-            return mode switch
-            {
-                SerializationMode.Ordinal => GetObjectOrdinal<T>(ldata),
-                //SerializationMode.Header => GetObjectHeader<T>(ldata),
-                _ => null!
-            };
+            if (prop.Ignore) continue;
+
+            var pi = prop.Pindex;
+            var ptype = prop.Ptype;
+            var pinfo = prop.Pinfo;
+
+            object value = GetDataValue(ldata[pi], ptype);
+            pinfo.SetValue(obj, value);
         }
-        private T GetObjectOrdinal<T>(string[] ldata) where T : class, new()
+
+        return obj;
+    }
+    private T GetObjectHeader<T>(string[] ldata) where T : class, new()
+    {
+        T obj = new();
+        for (int i = 0; i < headersLen; i++)
         {
-            int ldataLength = ldata.Length;
-            if (ldataLength != propertiesCount) return null!;
+            string hd = headers[i];
+            if (string.IsNullOrWhiteSpace(hd)) continue;
+            if (hd == ldata[i]) return null!;
 
-            T obj = new();
+            var prop = properties[hd];
+            if (prop.Ignore) continue;
 
-            foreach (var prop in properties)
-            {
-                if (prop.Ignore) continue;
-
-                var pi = prop.Pindex;
-                var ptype = prop.Ptype;
-                var pinfo = prop.Pinfo;
-
-                object value = GetDataValue(ldata[pi], ptype);
-                pinfo.SetValue(obj, value);
-            }
-
-            return obj;
+            var ptype = prop.Ptype;
+            var pinfo = prop.Pinfo;
+            
+            object value = GetDataValue(ldata[i], ptype);
+            pinfo.SetValue(obj, value);
         }
-        private T GetObjectOrdinal<T>(ImmutableArray<string> ldata) where T : class, new()
+
+        return obj;
+    }
+
+    //private T GetObjectOrdinal<T>(string[] ldata, out object? key) where T : class, new()
+    //{
+    //    key = null;
+    //    int ldataLength = ldata.Length;
+    //    if (ldataLength != propertiesCount) return null!;
+
+    //    T obj = new();
+
+    //    foreach (var prop in properties)
+    //    {
+    //        if (prop.Ignore) continue;
+
+    //        var pi = prop.Pindex;
+    //        var ptype = prop.Ptype;
+    //        var pinfo = prop.Pinfo;
+
+    //        object value = GetDataValue(ldata[pi], ptype);
+    //        pinfo.SetValue(obj, value);
+
+    //        if (prop.IsKey) key = value;
+    //    }
+
+    //    return obj;
+    //}
+    //private T GetObjectHeader<T>(string[] ldata, out object? key) where T : class, new()
+    //{
+    //    T obj = new();
+    //    key = null;
+    //    for (int i = 0; i < headersLen; i++)
+    //    {
+    //        string hd = headers[i];
+    //        if (string.IsNullOrWhiteSpace(hd)) continue;
+
+    //        var prop = properties[hd];
+    //        if (prop.Ignore) continue;
+
+    //        var ptype = prop.Ptype;
+    //        var pinfo = prop.Pinfo;
+
+    //        { }
+    //        //object value = GetDataValue(data, ptype, prop.Pindex, reader.Lindex, ldata);
+    //        object value = GetDataValue(ldata[i], ptype);
+    //        pinfo.SetValue(obj, value);
+    //        if (prop.IsKey) key = value;
+    //    }
+
+    //    return obj;
+    //}
+    //private static object GetDataValue(string data, Type tProp, int i = 0, int ii = -1, string[] ldata = null)
+    private static object GetDataValue(string data, Type tProp)
+    {
+        if (string.IsNullOrWhiteSpace(data)) return null!;
+
+        if (tProp.IsEnum)
+            return GetDataEnum(data, tProp);
+
+        object value = tProp switch
         {
-            int ldataLength = ldata.Length;
-            if (ldataLength != propertiesCount) return null!;
+            { } when tProp == typeof(decimal) => Convert.ToDecimal(data, CultureInfo.InvariantCulture),
+            { } when tProp == typeof(double) => Convert.ToDouble(data, CultureInfo.InvariantCulture),
+            { } when tProp == typeof(float) => Convert.ToSingle(data, CultureInfo.InvariantCulture),
+            _ => Convert.ChangeType(data, tProp!)
+        };
+        
+        return value;
+    }
+    private static object GetDataEnum(string data, Type tProp)
+    {
+        // Console.WriteLine(data);
+        bool parsed = Enum.TryParse(tProp, data, false, out var enumValue);
+        return parsed ? enumValue! : Enum.Parse(tProp, "0");
+        //return parsed ? enumValue! : Convert.ChangeType(0, tProp);
+    }
+    public bool InitHeaders(string line, char delimiter)
+    {
+        headers = line.Split(delimiter);
+        if (headers.Length <= 0) return false;
+        headersLen = headers.Length;
+        return true;
+    }
+    private void InitHeaders()
+    {
+        headers = properties.AsHeaders();
+        headersLen = headers.Length;
+    }
+    public void CleanHeaders()
+    {
+        if (headers is not null)
+            Array.Clear(headers, 0, headers.Length);
+    }
+    public static object GetObjectPropertyValue<T>(T obj, int propIndex)
+    {
+        PropertyInfo pinfo = typeof(T).GetProperties()[propIndex];
+        if (pinfo is null) return null!;
 
-            T obj = new();
-
-            foreach (var prop in properties)
-            {
-                if (prop.Ignore) continue;
-
-                var pi = prop.Pindex;
-                var ptype = prop.Ptype;
-                var pinfo = prop.Pinfo;
-
-                object value = GetDataValue(ldata[pi], ptype);
-                pinfo.SetValue(obj, value);
-            }
-
-            return obj;
-        }
-        private T GetObjectHeader<T>(string[] ldata) where T : class, new()
-        {
-            T obj = new();
-
-            for (int i = 0; i < headers.Length; i++)
-            {
-                string hd = headers[i];
-                if (string.IsNullOrWhiteSpace(hd)) continue;
-
-                var prop = properties[hd];
-                if (prop.Ignore) continue;
-
-                var ptype = prop.Ptype;
-                var pinfo = prop.Pinfo;
-
-                { }
-                //object value = GetDataValue(data, ptype, prop.Pindex, reader.Lindex, ldata);
-                object value = GetDataValue(ldata[i], ptype);
-                pinfo.SetValue(obj, value);
-            }
-
-            return obj;
-        }
-        //private static object GetDataValue(string data, Type tProp, int i = 0, int ii = -1, string[] ldata = null)
-        private static object GetDataValue(string data, Type tProp)
-        {
-            if (string.IsNullOrWhiteSpace(data)) return null!;
-
-            if (tProp.IsEnum)
-                return GetDataEnum(data, tProp);
-                //return GetDataEnum(data, tProp, i, ii, ldata);
-
-            object value = tProp switch
-            {
-                { } when tProp == typeof(decimal) => Convert.ToDecimal(data, CultureInfo.InvariantCulture),
-                { } when tProp == typeof(double) => Convert.ToDouble(data, CultureInfo.InvariantCulture),
-                _ => Convert.ChangeType(data, tProp)
-            };
-
-            return value;
-        }
-        //private static object GetDataEnum(string data, Type tProp, int i = 0, int ii = -1, string[] ldata = null)
-        private static object GetDataEnum(string data, Type tProp)
-        {
-           // Console.WriteLine(data);
-            bool parsed = Enum.TryParse(tProp, data, false, out var enumValue);
-            return parsed ? enumValue! : Enum.Parse(tProp, "0");
-            //return parsed ? enumValue! : Convert.ChangeType(0, tProp);
-        }
-        public bool InitHeaders(string line, char delimiter)
-        {
-            headers = line.Split(delimiter);
-            if (headers.Length <= 0) return false;
-            return true;
-        }
-        private void InitHeaders()
-        {
-            headers = properties.AsHeaders();
-        }
-        public void CleanHeaders()
-        {
-            if (headers is not null)
-                Array.Clear(headers, 0, headers.Length);
-        }
+        return pinfo.GetValue(obj);
     }
 }

@@ -1,9 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.Diagnostics;
 
 namespace CsvSerializerTest;
 public enum RecipeType
@@ -25,6 +20,10 @@ public sealed class BuyOrder
     public int Quantity { get; set; }
     public decimal UnitPrice { get; set; }
     public RecipeType RecipeType { get; set; }
+    public override string ToString()
+    {
+        return $"{OrderID}, {ClientID}, {Description}";
+    }
 }
 
 public static class MiscTest

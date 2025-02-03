@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.Text;
 
 namespace CsvFileHandler.Handler;
 
@@ -11,6 +7,7 @@ public enum StreamFileMode
     None,
     ReadLines,
     WriteLines,
+    WriteLine,
     Deserialize,
 }
 
@@ -40,6 +37,12 @@ public class CsvHandlerOptions(Encoding encoding, char delimiter)
                 break;
             case StreamFileMode.WriteLines:
                 FileMode = FileMode.Create;
+                FileAccess = FileAccess.Write;
+                FileShare = FileShare.None;
+                FileOptions = FileOptions.SequentialScan;
+                break;
+            case StreamFileMode.WriteLine:
+                FileMode = FileMode.Append;
                 FileAccess = FileAccess.Write;
                 FileShare = FileShare.None;
                 FileOptions = FileOptions.SequentialScan;
